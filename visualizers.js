@@ -8,6 +8,16 @@ function create(canvas){
   var freq = new Uint8Array(1024), timeData = new Uint8Array(2048);
   var frameCount = 0;
   var accent = '#e8a020';
+  var quality = 'high';
+  // Low quality: canvas glow (shadowBlur) is the most expensive thing a phone draws, so it is switched off
+  function setQuality(q){
+    quality = q === 'low' ? 'low' : 'high';
+    if (quality === 'low') {
+      try { Object.defineProperty(c, 'shadowBlur', { configurable: true, get: function(){ return 0; }, set: function(){} }); } catch(e) {}
+    } else {
+      try { delete c.shadowBlur; } catch(e) {}
+    }
+  }
   function getBass(){ var b=0; for(var i=0;i<10;i++) b+=freq[i]; return b/10/255; }
   function getMid(){ var m=0; for(var i=10;i<100;i++) m+=freq[i]; return m/90/255; }
   function getTreble(){ var t=0; for(var i=100;i<300;i++) t+=freq[i]; return t/200/255; }
@@ -518,8 +528,43 @@ return {
     frameCount++;
     (RENDER[current] || renderDefault)();
   },
+  setQuality: setQuality,
+  quality: function(){ return quality; },
   styles: Object.keys(RENDER).concat(['default'])
 };
 }
-window.RATVIZ = { create: create };
+
+// Guess what the device can handle before anything is drawn
+function detectTier(){
+  var ua = navigator.userAgent || '', reasons = [];
+  var touch = navigator.maxTouchPoints || 0;
+  var mobile = (navigator.userAgentData && navigator.userAgentData.mobile) || /Android|iPhone|iPad|iPod|Mobile/i.test(ua) || (/Macintosh/.test(ua) && touch > 1);
+  if (mobile) reasons.push('mobile os');
+  var small = Math.min(window.screen.width, window.screen.height) < 820;
+  if (small && touch > 0) reasons.push('small touch screen');
+  var cores = navigator.hardwareConcurrency || 8;
+  if (cores <= 2) reasons.push(cores + ' cpu cores');
+  var mem = navigator.deviceMemory || 8;
+  if (mem <= 2) reasons.push(mem + ' gb memory');
+  return { tier: reasons.length ? 'low' : 'high', reasons: reasons };
+}
+
+// Watches the real frame rate and calls onSlow once if it stays under about 35 fps
+function fpsGuard(onSlow){
+  var hist = [], last = 0, fired = false;
+  return {
+    tick: function(now){
+      if (last) { if (!document.hidden) { hist.push(Math.min(now - last, 250)); if (hist.length > 150) hist.shift(); } }
+      last = now;
+      var sum = hist.reduce(function(a, b){ return a + b; }, 0);
+      if (!fired && hist.length >= 20 && sum >= 3000) {   // judge after about 3 seconds of frames
+        var avg = sum / hist.length;
+        if (avg > 28) { fired = true; onSlow(Math.round(1000 / avg)); }
+      }
+    },
+    reset: function(){ hist = []; last = 0; fired = false; }
+  };
+}
+
+window.RATVIZ = { create: create, detectTier: detectTier, fpsGuard: fpsGuard };
 })();
